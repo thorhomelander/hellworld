@@ -1,0 +1,513 @@
+[s2021103050@centos8-linux Tue Nov 14 06:01 PM DNS_recursive]$ cat local_server.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#define ROOTPORT 5051
+#define LOCALPORT 5055
+
+int main() {
+        int socketfd = 0, localfd = 0;
+        int rootfd = 0, tldfd = 0, authfd = 0;
+
+        socklen_t length = sizeof(struct sockaddr_in);
+
+        struct sockaddr_in host_addr, root_addr, client_addr;
+        char buffer[512];
+        char reqip[30];
+        int recvbytes, sentbytes;
+
+        socketfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+        if(socketfd < 0) {
+                fprintf(stderr, "Error in socket creation.\n");
+                return -1;
+        }
+
+        host_addr.sin_family = AF_INET;
+        host_addr.sin_port = htons(LOCALPORT);
+        inet_pton(AF_INET, "127.0.0.1", &host_addr.sin_addr);
+
+        if(bind(socketfd, (struct sockaddr*)&host_addr, sizeof(host_addr)) < 0) {
+                fprintf(stderr, "Error in binding port to socket.\n");
+                return -1;
+        }
+
+        while(1) {
+                recvbytes = recvfrom(socketfd, buffer, sizeof(buffer), 0, (struct sockaddr*)&client_addr, &length);
+                if(strncmp(buffer, "exit", sizeof("exit")) == 0)
+                        break;
+
+                fprintf(stdout, "Request from client : %s\n", buffer);
+                fprintf(stdout, "Querying root DNS...\n");
+
+                rootfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+                if(rootfd < 0) {
+                        fprintf(stderr, "Error in socket creation.\n");
+                        return -1;
+                }
+
+                root_addr.sin_family = AF_INET;
+                root_addr.sin_port = htons(ROOTPORT);
+                inet_pton(AF_INET, "127.0.0.1", &root_addr.sin_addr);
+
+                sentbytes = sendto(rootfd, buffer, strlen(buffer) + 1, 0, (struct sockaddr*)&root_addr, length);
+                recvbytes = recvfrom(rootfd, reqip, sizeof(reqip), 0, NULL, NULL);
+
+                fprintf(stdout, "Server IP for %s: %s.\n(returned by root DNS)\nreturning to client...\n\n", buffer, reqip);
+
+                close(rootfd);
+
+                sentbytes = sendto(socketfd, reqip, strlen(reqip) + 1, 0, (struct sockaddr*)&client_addr, length);
+        }
+
+        close(socketfd);
+        return 0;
+}
+[s2021103050@centos8-linux Tue Nov 14 06:01 PM DNS_recursive]$ ls
+a.out  auth_server.c  auth.txt  client.c  local_server.c  root_server.c  root.txt  tld_server.c  tld.txt
+[s2021103050@centos8-linux Tue Nov 14 06:01 PM DNS_recursive]$ cat root
+root_server.c  root.txt
+[s2021103050@centos8-linux Tue Nov 14 06:01 PM DNS_recursive]$ cat root_server.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#define ROOTPORT 5051
+#define TLDPORT 5052
+
+int main() {
+
+        int socketfd = 0, tldfd = 0;
+
+        socklen_t length = sizeof(struct sockaddr_in);
+
+        struct sockaddr_in host_addr, tld_addr, client_addr;
+
+        char buffer[64];
+        char reqip[30];
+        int recvbytes, sentbytes;
+
+        socketfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+        if(socketfd < 0) {
+                fprintf(stderr, "Error in socket creation.\n");
+                return -1;
+        }
+
+        host_addr.sin_family = AF_INET;
+        host_addr.sin_port = htons(ROOTPORT);
+        inet_pton(AF_INET, "127.0.0.1", &host_addr.sin_addr);
+
+        if(bind(socketfd, (struct sockaddr*)&host_addr, sizeof(host_addr)) < 0) {
+                fprintf(stderr, "Error in binding port to socket.\n");
+                return -1;
+        }
+
+        while(1) {
+                recvbytes = recvfrom(socketfd, buffer, sizeof(buffer), 0, (struct sockaddr*)&client_addr, &length);
+          if(strncmp(buffer, "exit", sizeof("exit")) == 0)
+                        break;
+
+                fprintf(stdout, "Request from client : %s.\n", buffer);
+
+                char domain[6];
+                int i = 0, j = 0;
+
+                while(buffer[i++] != '.');
+                while(buffer[i++] != '.');
+
+                while(buffer[i] != '\0')
+                        domain[j++] = buffer[i++];
+
+                domain[j] = '\0';
+
+                FILE* fd = fopen("root.txt", "r");
+
+                if(!fd) {
+                        fprintf(stderr, "Could not access DNS records.\n");
+                        sendto(socketfd, "ERROR", strlen("ERROR") + 1, 0, (struct sockaddr*)&client_addr, length);
+                        continue;
+                }
+
+                char linebuff[40], filebuff[400], ip[20], tempbuff[40], lastbuff[40];
+                char *temp, *iptemp;
+                int flag = 0;
+
+                linebuff[0] = '\0';
+                lastbuff[0] = '\0';
+                filebuff[0] = '\0';
+                ip[0] = '\0';
+
+                while( fgets(linebuff, sizeof(linebuff), fd) ) {
+                        strcpy(tempbuff, linebuff);
+                        temp = strtok(tempbuff, " ");
+
+                        if(flag == 0 && strncmp(temp, domain, strlen(domain)) == 0) {
+                                flag = 1;
+                                strcpy(lastbuff, linebuff);
+                                iptemp = strtok(NULL, "\n");
+                          for(i = 0; *iptemp != '\0'; i++, iptemp++)
+                                        ip[i] = *iptemp;
+
+                                ip[i] = '\0';
+                        }
+
+                        else {
+                                strcat(filebuff, linebuff);
+                        }
+                }
+
+                fclose(fd);
+
+                if(flag == 0) {
+                        sentbytes = sendto(socketfd, "404", strlen("404") + 1, 0, (struct sockaddr*)&client_addr, length);
+                        continue;
+                }
+
+                else {
+                        int fdes = open("root.txt", O_WRONLY);
+                        strcat(filebuff, lastbuff);
+                        write(fdes, filebuff, strlen(filebuff));
+                        close(fdes);
+
+                        fprintf(stdout, "IP for TLD SERVER of %s: %s.\n(From local DNS records)\n\n", domain, ip);
+                }
+
+                fprintf(stdout, "Querying TLD DNS...\n");
+                tldfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+                if(tldfd < 0) {
+                        fprintf(stderr, "Error in socket creation.\n");
+                        return -1;
+                }
+
+                tld_addr.sin_family = AF_INET;
+                tld_addr.sin_port = htons(TLDPORT);
+                inet_pton(AF_INET, "127.0.0.1", &tld_addr.sin_addr);
+
+                sentbytes = sendto(tldfd, buffer, strlen(buffer) + 1, 0, (struct sockaddr*)&tld_addr, length);
+                recvbytes = recvfrom(tldfd, reqip, sizeof(reqip), 0, NULL, NULL);
+
+                fprintf(stdout, "Server IP for %s: %s.\n(returned by TLD DNS)\nReturning to local DNS...\n\n", buffer, reqip);
+
+                close(tldfd);
+
+                sentbytes = sendto(socketfd, reqip, strlen(reqip) + 1, 0, (struct sockaddr*)&client_addr, length);
+        }
+
+        close(socketfd);
+        return 0;
+}
+[s2021103050@centos8-linux Tue Nov 14 06:02 PM DNS_recursive]$ cat tld_server.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#define TLDPORT 5052
+#define AUTHPORT 5053
+
+int main() {
+        int socketfd = 0, authfd = 0;
+
+        socklen_t length = sizeof(struct sockaddr_in);
+
+        struct sockaddr_in host_addr, auth_addr, client_addr;
+        char buffer[64];
+        char reqip[30];
+        int recvbytes, sentbytes;
+
+        socketfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+        if(socketfd < 0) {
+                fprintf(stderr, "Error in socket creation.\n");
+                return -1;
+        }
+
+        host_addr.sin_family = AF_INET;
+        host_addr.sin_port = htons(TLDPORT);
+        inet_pton(AF_INET, "127.0.0.1", &host_addr.sin_addr);
+
+        if(bind(socketfd, (struct sockaddr*)&host_addr, sizeof(host_addr)) < 0) {
+                fprintf(stderr, "Error in binding port to socket.\n");
+                return -1;
+        }
+
+        while(1) {
+                recvbytes = recvfrom(socketfd, buffer, sizeof(buffer), 0, (struct sockaddr*)&client_addr, &length);
+
+                if(strncmp(buffer, "exit", sizeof("exit")) == 0)
+                     break;
+
+                fprintf(stdout, "Request from client : %s.\n", buffer);
+
+                char domain[20];
+                domain[0] = '\0';
+                int i = 0, j = 0;
+
+                while(buffer[i++] != '.');
+
+                while(buffer[i] != '\0')
+                        domain[j++] = buffer[i++];
+
+                domain[j] = '\0';
+
+                fprintf(stdout, "%s\n", domain);
+
+                FILE* fd = fopen("tld.txt", "r");
+
+                if(!fd) {
+                        fprintf(stderr, "Could not access DNS records.\n");
+                        sendto(socketfd, "ERROR", strlen("ERROR") + 1, 0, (struct sockaddr*)&client_addr, length);
+                        continue;
+                }
+
+                char linebuff[40], filebuff[400], ip[20], tempbuff[40], lastbuff[40];
+                char *temp, *iptemp;
+                int flag = 0;
+
+                linebuff[0] = '\0';
+                lastbuff[0] = '\0';
+                filebuff[0] = '\0';
+                ip[0] = '\0';
+
+                while( fgets(linebuff, sizeof(linebuff), fd) ) {
+                        strcpy(tempbuff, linebuff);
+                        temp = strtok(tempbuff, " ");
+
+                        if(flag == 0 && strncmp(temp, domain, strlen(domain)) == 0) {
+                                flag = 1;
+                                strcpy(lastbuff, linebuff);
+                                iptemp = strtok(NULL, "\n");
+                            for(i = 0; *iptemp != '\0'; i++, iptemp++)
+                                        ip[i] = *iptemp;
+
+                                ip[i] = '\0';
+                        }
+
+                        else {
+                                strcat(filebuff, linebuff);
+                        }
+                }
+
+                fclose(fd);
+
+                if(flag == 0) {
+                        sentbytes = sendto(socketfd, "404", strlen("404") + 1, 0, (struct sockaddr*)&client_addr, length);
+                        continue;
+                }
+
+                else {
+                        int fdes = open("tld.txt", O_WRONLY);
+                        strcat(filebuff, lastbuff);
+                        write(fdes, filebuff, strlen(filebuff));
+                        close(fdes);
+                        fprintf(stdout, "IP for AUTHORITATIVE SERVER of %s : %s.\n(From local DNS records)\n\n", domain, ip);
+                }
+                fprintf(stdout, "Querying AUTH DNS...\n");
+                authfd = socket(AF_INET, SOCK_DGRAM, 0);
+                if(authfd < 0) {
+                        fprintf(stderr, "Error in socket creation.\n");
+                        return -1;
+                }
+
+                auth_addr.sin_family = AF_INET;
+                auth_addr.sin_port = htons(AUTHPORT);
+                inet_pton(AF_INET, "127.0.0.1", &auth_addr.sin_addr);
+
+                sentbytes = sendto(authfd, buffer, strlen(buffer) + 1, 0, (struct sockaddr*)&auth_addr, length);
+                recvbytes = recvfrom(authfd, reqip, sizeof(reqip), 0, NULL, NULL);
+
+                fprintf(stdout, "Server IP for %s: %s.\n(returned by AUTH DNS)\nReturning to root DNS...\n\n", buffer, reqip);
+
+                close(authfd);
+
+                sentbytes = sendto(socketfd, reqip, strlen(reqip) + 1, 0, (struct sockaddr*)&client_addr, length);
+        }
+
+        close(socketfd);
+        return 0;
+}
+[s2021103050@centos8-linux Tue Nov 14 06:02 PM DNS_recursive]$ cat auth_server.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#define AUTHPORT 5053
+
+int main() {
+        int socketfd = 0;
+
+        socklen_t length = sizeof(struct sockaddr_in);
+
+        struct sockaddr_in host_addr, client_addr;
+        char buffer[64];
+        char reqip[30];
+        int recvbytes, sentbytes;
+
+        socketfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+        if(socketfd < 0) {
+                fprintf(stderr, "Error in socket creation.\n");
+                return -1;
+        }
+
+        host_addr.sin_family = AF_INET;
+        host_addr.sin_port = htons(AUTHPORT);
+        inet_pton(AF_INET, "127.0.0.1", &host_addr.sin_addr);
+
+        if(bind(socketfd, (struct sockaddr*)&host_addr, sizeof(host_addr)) < 0) {
+                fprintf(stderr, "Error in binding port to socket.\n");
+                return -1;
+        }
+
+        while(1) {
+           recvbytes = recvfrom(socketfd, buffer, sizeof(buffer), 0, (struct sockaddr*)&client_addr, &length);
+
+                if(strncmp(buffer, "exit", sizeof("exit")) == 0)
+                        break;
+
+                fprintf(stdout, "Request from client : %s.\n", buffer);
+
+                FILE* fd = fopen("auth.txt", "r");
+
+                if(!fd) {
+                        fprintf(stderr, "Could not access DNS records.\n");
+                        sendto(socketfd, "ERROR", strlen("ERROR") + 1, 0, (struct sockaddr*)&client_addr, length);
+                        continue;
+                }
+
+                char linebuff[40], filebuff[400], ip[20], tempbuff[40], lastbuff[40];
+                char *temp, *iptemp;
+                int flag = 0, i;
+
+                linebuff[0] = '\0';
+                lastbuff[0] = '\0';
+                filebuff[0] = '\0';
+                ip[0] = '\0';
+
+                while( fgets(linebuff, sizeof(linebuff), fd) ) {
+                        strcpy(tempbuff, linebuff);
+                        temp = strtok(tempbuff, " ");
+
+                        if(flag == 0 && strncmp(temp, buffer, strlen(buffer)) == 0) {
+                                flag = 1;
+                                strcpy(lastbuff, linebuff);
+                                iptemp = strtok(NULL, "\n");
+
+                                for(i = 0; *iptemp != '\0'; i++, iptemp++)
+                                        ip[i] = *iptemp;
+
+                                ip[i] = '\0';
+                        }
+
+                        else {
+                                strcat(filebuff, linebuff);
+                       }
+                }
+
+                fclose(fd);
+
+                if(flag == 0) {
+                        sentbytes = sendto(socketfd, "404", strlen("404") + 1, 0, (struct sockaddr*)&client_addr, length);
+                        continue;
+                }
+
+                else {
+                        int fdes = open("auth.txt", O_WRONLY);
+
+                        strcat(filebuff, lastbuff);
+                        write(fdes, filebuff, strlen(filebuff));
+                        close(fdes);
+
+                        fprintf(stdout, "Requested IP is : %s.\n(From local DNS records)\nReturning to TLD DNS...\n\n", ip);
+
+                        sentbytes = sendto(socketfd, ip, strlen(ip) + 1, 0, (struct sockaddr*)&client_addr, length);
+                }
+        }
+        close(socketfd);
+        return 0;
+}
+[s2021103050@centos8-linux Tue Nov 14 06:02 PM DNS_recursive]$ ls
+a.out  auth_server.c  auth.txt  client.c  local_server.c  root_server.c  root.txt  tld_server.c  tld.txt
+[s2021103050@centos8-linux Tue Nov 14 06:02 PM DNS_recursive]$ cat auth.txt
+drive.google.com 56.98.23.123
+www.google.com 67.74.45.135
+mail.google.com 45.16.75.24
+[s2021103050@centos8-linux Tue Nov 14 06:02 PM DNS_recursive]$ cat root.txt
+edu 54.245.23.23
+org 4.34.24.1
+com 10.2.4.14
+[s2021103050@centos8-linux Tue Nov 14 06:02 PM DNS_recursive]$ cat tld.txt
+yahoo.com 15.16.143.251
+baidu.com 75.67.34.14
+google.com 10.14.56.123
+[s2021103050@centos8-linux Tue Nov 14 06:02 PM DNS_recursive]$ cat client.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#define LOCALDNS 5055
+
+int main() {
+        int socketfd = 0, sentbytes, recvbytes;
+        struct sockaddr_in host_addr;
+        char input[20], buffer[20];
+
+        socketfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+        if(socketfd < 0) {
+                fprintf(stderr, "Error in socket creation.\n");
+                return -1;
+        }
+
+        host_addr.sin_family = AF_INET;
+        host_addr.sin_port = htons(LOCALDNS);
+        inet_pton(AF_INET, "127.0.0.1", &host_addr.sin_addr);
+
+        while(1) {
+                fprintf(stdout, ">> Enter the HostName: ");
+                scanf("%s", input);
+                sentbytes = sendto(socketfd, input, strlen(input) + 1, 0, (struct sockaddr*)&host_addr, sizeof(host_addr));
+
+                if(strncmp(input, "exit", sizeof("exit")) == 0)
+                        break;
+
+                recvbytes = recvfrom(socketfd, buffer, sizeof(buffer), 0, NULL, NULL);
+
+                printf("SERVER IP OF %s : %s\n", input, buffer);
+        }
+
+        close(socketfd);
+        return 0;
+}

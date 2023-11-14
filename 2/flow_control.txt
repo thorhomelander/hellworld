@@ -1,0 +1,155 @@
+
+
+#include<stdio.h>
+#include<stdlib.h>
+#include<string.h>
+#include<netinet/in.h>
+#include<sys/socket.h>
+#include<sys/types.h>
+#include<unistd.h>
+#define PORT 3034
+#define N 100
+
+int main()
+{
+        int sfd = socket(AF_INET,SOCK_STREAM,0);
+        struct sockaddr_in sa;
+
+        sa.sin_family = AF_INET;
+        sa.sin_port = htons(PORT);
+        sa.sin_addr.s_addr = INADDR_ANY;
+
+//      printf("jghjhj");
+        if(connect(sfd,(struct sockaddr*)&sa,sizeof(sa))<0)
+        {
+                printf("No");
+                return 0;
+        }
+
+        int n=6500;
+        int m=600;
+        int MSS=100;
+        int ISN=0;
+        int ew = m;
+        int lbs = ISN - 1;
+
+        int aw,ack;
+        char bs[N],br[N];
+        while(ew>0 && lbs<n)
+        {
+                int ds = lbs+1;
+                int de=ds+MSS-1;
+                //printf("SEQ=%d,DATA=%d-%d",ds,ds,de);
+                sprintf(bs,"SEQ=%d,DATA=%d-%d",ds,ds,de);
+                send(sfd,bs,sizeof(bs),0);
+                lbs=de;
+                recv(sfd,br,sizeof(br),0);
+                sscanf(br,"ACK=%d,AW=%d",&ack,&aw);
+                ew=aw;
+//              printf("Hi");
+                if(ew!=-1)
+                printf("SEQ=%d,DATA=%d-%d,ACK=%d,AW=%d\n",ds,ds,de,ack,aw);
+        }
+        close(sfd);
+        return 0;
+}
+
+
+
+
+
+
+
+
+#include<stdio.h>
+#include<stdlib.h>
+#include<string.h>
+#include<unistd.h>
+#include<sys/socket.h>
+#include<sys/types.h>
+#include<netinet/in.h>
+#define PORT 3034
+#define N 100
+
+int i=50;
+int j=200;
+int k=5;
+int n=0;
+char br[N];
+int f=0;
+int flag=0;
+int MSS=100;
+void processp(char s[],int *ack,int *aw)
+{
+        int ds,de,sn;
+
+         sscanf(br,"SEQ=%d,DATA=%d-%d",&sn,&ds,&de);
+         if(n!=k) n++;
+         if(n!=k)
+         {
+                 *ack=de+1;
+         }
+
+         if(f<j/MSS-1)
+         {
+                 if(n!=k)
+                        *aw-=(de-ds+1);
+                 f=(f+1)%(j/MSS);
+         }
+         else
+         {
+                 if(n!=k)
+                         *aw-=(de-ds-i+1);
+                 else
+                         *aw+=i;
+                 f=(f+1)%(j/MSS);
+         }
+
+         if((-*aw+de-*ack+1)==0) flag=1;
+}
+
+
+
+int main()
+{
+        int ssfd=socket(AF_INET,SOCK_STREAM,0);
+        struct sockaddr_in sa;
+        sa.sin_family = AF_INET;
+        sa.sin_port = htons(PORT);
+        sa.sin_addr.s_addr = INADDR_ANY;
+
+        if(bind(ssfd,(struct sockaddr*)&sa,sizeof(sa))<0)
+                return 0;
+
+        if(listen(ssfd,1)<0)
+                return 0;
+
+        int cfd=accept(ssfd,NULL,NULL);
+
+        char bs[N];
+        int m=600;
+        int aw=m;
+        int ack_num=-1;
+        char ack_data[N];
+        int b=0;
+
+        while(aw>0)
+        {
+                recv(cfd,br,sizeof(br),0);
+                processp(br,&ack_num,&aw);
+                if(flag==1)
+                {
+                        sprintf(bs,"ACK=%d,AW=%d",ack_num,-1);
+                send(cfd,bs,sizeof(bs),0);
+                        return 0;
+                }
+
+                sprintf(bs,"ACK=%d,AW=%d",ack_num,aw);
+                send(cfd,bs,sizeof(bs),0);
+                printf("ACK=%d,AW=%d\n",ack_num,aw);
+        }
+        close(cfd);
+        close(ssfd);
+        return 0;
+}
+

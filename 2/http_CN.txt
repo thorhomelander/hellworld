@@ -1,0 +1,142 @@
+#include <stdio.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <string.h>
+#include <time.h>
+#define PORT 5632
+#define SIZE 300
+#define N 20
+typedef struct{
+        int regno;
+        int age;
+        int sem;
+        int marks[5];
+        char name[SIZE];
+        char gender;
+}student;
+typedef struct{
+        char method[N];
+        char path[N];
+        char version[N];
+        char accept[N];
+        char connection[N];
+        char useragent[N];
+        student stu;
+}request;
+typedef struct{
+        int status;
+        char statmsg[N];
+        char version[N];
+        char connection[N];
+        char contype[N];
+        char datetime[N];
+        student stu;
+}response;
+[s2021103049@centos8-linux Tue Nov 14 03:26 PM w4]$ cat nonperserver.c
+#include "head.h"
+
+int main(int argc, char *argv[]){
+        response sr;
+        strcpy(sr.version, "http/1.1");
+        strcpy(sr.connection, "keep-alive");
+        strcpy(sr.contype, "text");
+        struct sockaddr_in serveraddr;
+        int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+        serveraddr.sin_family = AF_INET;
+        serveraddr.sin_port = htons(PORT);
+        serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
+        if (bind(sockfd, (struct sockaddr *) &serveraddr,
+                                sizeof(serveraddr)) < 0) return 0;
+        if (listen(sockfd, 2) < 0) return 0;
+        printf("Server listening on port: %d\n", PORT);
+
+        int clisock = accept(sockfd, NULL, NULL);
+        if (clisock < 0) return 0;
+
+        while(1){
+                request clr;
+                int len = recv(clisock, &clr, sizeof(clr), 0);
+                printf("CLIENT'S REQUEST:\n%s%s%s\nConnection: %s\nAccept: %s\nUser-Agent: %s\nRegno: %d\nRequired sem: %d\n\n",clr.method, clr.path, clr.version,clr.connection, clr.accept, clr.useragent, clr.stu.regno, clr.stu.sem);
+                if (clr.stu.sem == -1) break;
+
+                FILE *inf;
+                inf = fopen("stud.txt", "rb");
+                student s;
+                int found = 0;
+                while(fread(&s, sizeof(student), 1, inf) == 1){
+                        if (s.regno == clr.stu.regno && s.sem ==
+                                        clr.stu.sem) {
+                                found = 1;
+                                sr.stu = s;
+                                strcpy(sr.statmsg, "OK");
+                                sr.status = 200;
+                                break;
+                        }
+                } if (!found){
+                        sr.stu.regno = -1;
+                        sr.stu.sem = -1;
+                        strcpy(sr.statmsg, "Not found");
+                        sr.status = 404;
+                }
+                fclose(inf);
+                send(clisock, &sr, sizeof(sr), 0);
+        }
+        close(sockfd);
+        return 0;
+}
+
+[s2021103049@centos8-linux Tue Nov 14 03:26 PM w4]$ vi noncli.c
+[s2021103049@centos8-linux Tue Nov 14 03:26 PM w4]$ cat noncli.c
+#include "head.h"
+int main(int argc, char *argv[]){
+        request cr;
+        strcpy(cr.method, "GET");
+        strcpy(cr.path, "/");
+        strcpy(cr.version, "http/1.1");
+        strcpy(cr.connection, "keep-alive");
+        strcpy(cr.accept, "text");
+        struct sockaddr_in cliaddr;
+        int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+        cliaddr.sin_family = AF_INET;
+        cliaddr.sin_port = htons(PORT);
+        cliaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        if (connect(sockfd, (struct sockaddr *) &cliaddr, sizeof(cliaddr))< 0) return 0;
+        printf("Connection made with the server.\n");
+        printf("Enter useragent: ");
+        scanf("%s", cr.useragent);
+        printf("Enter RegNo of the student: ");
+        scanf("%d", &cr.stu.regno);
+        while(1){
+                printf("Enter semester [-1 to exit]: ");
+                scanf("%d", &cr.stu.sem);
+                send(sockfd, &cr, sizeof(cr), 0);
+                if (cr.stu.sem == -1) break;
+                response sr;
+                int len = recv(sockfd, &sr, sizeof(sr), 0);
+                if (len > 0){
+                        printf("SERVER'S RESPONSE: \n%s\n%d     %s\nConnection: %s\nContent-Type: %s\n\n", sr.version, sr.status,sr.statmsg, sr.connection, sr.contype);
+                        if (sr.status == 404){
+                                printf("Marksheet not found.\n");
+                        }
+                        else{
+                                printf(" MARKSHEET\n");
+                                printf("|----------------------------|\n");
+                                printf("|REGNO: NAME:\t AGE: GENDER:|\n");
+                                printf("|%d %s\t %d %c |\n",sr.stu.regno, sr.stu.name, sr.stu.age, sr.stu.gender);
+                                printf("|---------------------------|\n");
+                                printf("|SEM: %d\tMARKS: ", sr.stu.sem);
+                                for (int j = 0; j < 5; j++){
+                                        printf("%d ", sr.stu.marks[j]);
+                                }
+                                printf("|\n|----------------------------|\n");
+                        }
+                }
+        }
+        close(sockfd);
+        printf("Disconnected from the server.\n");
+
+        return 0;
+}
